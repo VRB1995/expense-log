@@ -230,10 +230,8 @@
   function renderChips() {
     var q = $('item').value.trim().toLowerCase();
     var ranked = rankedItems();
-    var out;
-    if (!q) {
-      out = ranked.slice(0, 8);
-    } else {
+    var out = [];
+    if (q) {
       var starts = [], has = [];
       ranked.forEach(function (x) {
         var l = x.toLowerCase();
@@ -245,6 +243,7 @@
     }
     var box = $('chips');
     box.textContent = '';
+    box.hidden = !out.length; // suggestions appear only while typing
     out.forEach(function (x) {
       box.appendChild(el('button', {
         'class': 'chip', type: 'button', text: x,
