@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1';
+  var VERSION = '2';
   var OTHER = '__other__';
   var LS = {
     cfg: 'ea.cfg', lists: 'ea.lists', queue: 'ea.queue', usage: 'ea.usage',
@@ -575,6 +575,17 @@
   start();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // When a new version takes over, reload once so it runs straight away. Skipped on the very
+    // first install (nothing to replace) and while a half-typed entry is on screen. Waiting
+    // entries are kept in the phone's storage, so a reload never loses them.
+    var hadController = !!navigator.serviceWorker.controller;
+    var reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadController || reloaded) return;
+      if ($('amount').value || $('item').value) { toast('Update ready. Reopen the app to use it.'); return; }
+      reloaded = true;
+      location.reload();
+    });
     navigator.serviceWorker.register('sw.js').catch(function () { /* offline start is a bonus */ });
   }
 })();

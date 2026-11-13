@@ -1,13 +1,19 @@
-// Service worker: lets the app open with no signal. Same-origin files are served from the cache
-// and refreshed in the background. Calls to the backend are never touched.
-var CACHE = 'expense-log-v1';
+// Service worker: lets the app open with no signal. Same-origin files are served from the saved
+// copy and refreshed in the background. Calls to the backend are never touched.
+// Bump CACHE when you ship a new version, so the old saved copy is thrown away.
+var CACHE = 'expense-log-v2';
 var SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'line.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png'
 ];
 
 self.addEventListener('install', function (e) {
-  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); }));
+  e.waitUntil(
+    caches.open(CACHE)
+      // cache: 'reload' skips the browser's own HTTP cache (GitHub Pages keeps files for 10 minutes)
+      .then(function (c) { return Promise.all(SHELL.map(function (u) { return c.add(new Request(u, { cache: 'reload' })); })); })
+      .then(function () { return self.skipWaiting(); })
+  );
 });
 
 self.addEventListener('activate', function (e) {
@@ -23,7 +29,8 @@ self.addEventListener('fetch', function (e) {
   if (r.method !== 'GET' || new URL(r.url).origin !== location.origin) return;
   e.respondWith(
     caches.match(r, { ignoreSearch: true }).then(function (hit) {
-      var net = fetch(r).then(function (res) {
+      // Always ask the server for the newest copy in the background ('no-cache' = revalidate).
+      var net = fetch(r.url, { cache: 'no-cache' }).then(function (res) {
         if (res && res.ok) {
           var copy = res.clone();
           caches.open(CACHE).then(function (c) { c.put(r, copy); });
