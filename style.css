@@ -25,6 +25,9 @@
   }
 }
 * { box-sizing: border-box; }
+/* No automatic scroll adjustment when content above the viewport changes size (it can make the
+   page jump, e.g. to the Account block, after a save). */
+html, body { overflow-anchor: none; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;

@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '2';
+  var VERSION = '3';
   var OTHER = '__other__';
   var LS = {
     cfg: 'ea.cfg', lists: 'ea.lists', queue: 'ea.queue', usage: 'ea.usage',
@@ -32,6 +32,8 @@
   var touched = { app: false, account: false };                         // user picked a value in this dropdown
   var working = null;                                                  // settings working copy
   var syncing = false, syncAgain = false, lastErr = null, retryTimer = null;
+  var waiters = [];                                                     // callers waiting for the current sync
+  var rejected = {};                                                    // ids the server refused
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -68,12 +70,12 @@
 
   // ── Toast ────────────────────────────────────────────────────────────────────────────────
   var toastTimer = null;
-  function toast(msg) {
+  function toast(msg, ms) {
     var t = $('toast');
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, ms || 2200);
   }
 
   // ── Backend calls ────────────────────────────────────────────────────────────────────────
@@ -106,6 +108,7 @@
 
   function applyState(st) {
     if (!st) return;
+    var before = JSON.stringify(lists);
     if (!dirty) {
       lists = { apps: st.apps || [], accounts: st.accounts || [], items: st.items || [] };
     } else {
@@ -114,8 +117,12 @@
     lsSet(LS.lists, lists);
     srv = { recent: st.recent || [], counts: st.counts || {} };
     lsSet(LS.srv, srv);
-    renderSelects(true);
-    renderChips();
+    // Rebuild the dropdowns only when the lists really changed, so a background refresh never
+    // touches the form the user is looking at.
+    if (JSON.stringify(lists) !== before) {
+      renderSelects(true);
+      renderChips();
+    }
     renderRecent();
   }
 
@@ -124,9 +131,13 @@
     if (queue.length || dirty) retryTimer = setTimeout(sync, 30000);
   }
 
+  // sync() resolves when the upload attempt that covers the caller's entry has finished.
   function sync() {
     if (!cfg) return Promise.resolve();
-    if (syncing) { syncAgain = true; return Promise.resolve(); }
+    if (syncing) {
+      syncAgain = true;
+      return new Promise(function (resolve) { waiters.push(resolve); });
+    }
     syncing = true;
     renderBadge();
     var st = null;
@@ -141,7 +152,8 @@
           lsSet(LS.queue, queue);
           st = r.state;
           var rej = (r.result && r.result.rejected) || [];
-          if (rej.length) toast(rej.length + ' entry rejected by the server: ' + rej[0].error);
+          rej.forEach(function (x) { rejected[x.id] = true; });
+          if (rej.length) toast(rej.length + ' entry rejected by the server: ' + rej[0].error, 5000);
         });
       });
     }
@@ -165,8 +177,25 @@
         syncing = false;
         renderBadge();
         renderRecent();
-        if (syncAgain) { syncAgain = false; sync(); } else { scheduleRetry(); }
+        if (syncAgain) { syncAgain = false; return sync(); }
+        scheduleRetry();
+        var w = waiters;
+        waiters = [];
+        w.forEach(function (resolve) { resolve(); });
       });
+  }
+
+  // Tells the user what happened to an entry they just saved, with its date.
+  function announce(entry) {
+    var label = prettyDate(entry.date);
+    toast('Saving for ' + label + '…', 20000);
+    sync().then(function () {
+      if (rejected[entry.id]) return; // the rejection message is already on screen
+      var waiting = queue.some(function (q) { return q.id === entry.id; });
+      toast(waiting
+        ? 'Saved on this phone for ' + label + '. Will upload when online.'
+        : 'Saved for ' + label + ' ✓', waiting ? 4000 : 2500);
+    });
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────────────────────
@@ -332,7 +361,7 @@
     lsSet(LS.queue, queue);
     renderRecent();
     renderBadge();
-    sync();
+    announce(entry); // shows "Saving for <date>…", uploads, then shows the result
   }
 
   function resetForm() {
@@ -344,7 +373,10 @@
     renderSelects(false);
     renderChips();
     updatePreview();
-    $('amount').focus();
+    // Back to the top of a clean form, ready for the next amount. preventScroll stops the browser
+    // from scrolling anywhere else (for example to the Account block) while it moves the focus.
+    window.scrollTo(0, 0);
+    $('amount').focus({ preventScroll: true });
   }
 
   function save() {
@@ -374,7 +406,6 @@
     }
     enqueue(entry);
     resetForm();
-    toast('Saved');
   }
 
   function logNothing() {
@@ -385,7 +416,6 @@
       id: uuid(), date: date, item: NOTHING, amountText: '0', app: '', account: '',
       counts: true, loggedAt: nowStr()
     });
-    toast('Logged: nothing on ' + prettyDate(date));
   }
 
   function removeEntry(r) {
