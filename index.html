@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="color-scheme" content="light dark">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <title>Expense log</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Expense log</h1>
+    <span id="badge" class="badge" role="status"></span>
+    <button id="btnSettings" class="icon-btn" type="button" aria-label="Settings">⚙</button>
+  </header>
+
+  <!-- First run: connect to the backend -->
+  <main id="viewSetup" hidden>
+    <section class="card">
+      <h2>Connect</h2>
+      <p class="muted">Open the setup link once on this phone, or paste the two values below.</p>
+      <label for="setupUrl">Web app URL</label>
+      <input id="setupUrl" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
+      <label for="setupToken">Token</label>
+      <input id="setupToken" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button id="setupSave" class="btn primary" type="button">Save and start</button>
+    </section>
+  </main>
+
+  <!-- Main: log an entry -->
+  <main id="viewLog" hidden>
+    <section class="card">
+      <label for="amount">Amount (₹)</label>
+      <div class="amount-row">
+        <input id="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+        <button id="plus" class="btn key" type="button" aria-label="Insert plus">+</button>
+      </div>
+      <div id="amountHint" class="hint"></div>
+
+      <label for="item">Item</label>
+      <input id="item" type="text" autocomplete="off" autocapitalize="sentences" placeholder="e.g. Petrol">
+      <div id="chips" class="chips"></div>
+
+      <div class="two">
+        <div>
+          <label for="app">App</label>
+          <div class="sel-row">
+            <select id="app"></select>
+            <button class="btn clear" type="button" data-clear="app" aria-label="Clear app">×</button>
+          </div>
+          <div id="appOther" class="other" hidden>
+            <input id="appOtherText" type="text" autocomplete="off" placeholder="Type the app">
+            <label class="check"><input id="appOtherAdd" type="checkbox"> Add to list</label>
+          </div>
+        </div>
+        <div>
+          <label for="account">Account</label>
+          <div class="sel-row">
+            <select id="account"></select>
+            <button class="btn clear" type="button" data-clear="account" aria-label="Clear account">×</button>
+          </div>
+          <div id="accountOther" class="other" hidden>
+            <input id="accountOtherText" type="text" autocomplete="off" placeholder="Type the account">
+            <label class="check"><input id="accountOtherAdd" type="checkbox"> Add to list</label>
+          </div>
+        </div>
+      </div>
+
+      <label for="date">Date <span id="dateLabel" class="muted"></span></label>
+      <div class="date-row">
+        <button id="dToday" class="btn seg" type="button">Today</button>
+        <button id="dYesterday" class="btn seg" type="button">Yesterday</button>
+        <input id="date" type="date">
+      </div>
+
+      <label class="check big"><input id="notExpense" type="checkbox"> Bill payment (not counted as an expense)</label>
+
+      <div class="preview-wrap">
+        <div class="muted small">Line</div>
+        <div id="preview" class="preview"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Last 5 entries</h2>
+      <div id="recent" class="recent"></div>
+    </section>
+
+    <div class="bar">
+      <button id="nothing" class="btn secondary" type="button">Nothing today</button>
+      <button id="save" class="btn primary" type="button" disabled>Save</button>
+    </div>
+  </main>
+
+  <!-- Settings -->
+  <main id="viewSettings" hidden>
+    <section class="card">
+      <h2>Apps</h2>
+      <p class="muted small">The top entry is the default. Use the arrows to reorder.</p>
+      <div id="edApps" class="editor"></div>
+      <div class="add-row"><input id="addApp" type="text" autocomplete="off" placeholder="Add an app"><button id="addAppBtn" class="btn secondary" type="button">Add</button></div>
+    </section>
+    <section class="card">
+      <h2>Accounts</h2>
+      <p class="muted small">The top entry is the default.</p>
+      <div id="edAccounts" class="editor"></div>
+      <div class="add-row"><input id="addAccount" type="text" autocomplete="off" placeholder="Add an account"><button id="addAccountBtn" class="btn secondary" type="button">Add</button></div>
+    </section>
+    <section class="card">
+      <h2>Connection</h2>
+      <label for="cfgUrl">Web app URL</label>
+      <input id="cfgUrl" type="url" autocomplete="off">
+      <label for="cfgToken">Token</label>
+      <input id="cfgToken" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div id="syncInfo" class="muted small"></div>
+      <button id="syncNow" class="btn secondary" type="button">Sync now</button>
+      <div class="muted small" id="ver"></div>
+    </section>
+    <div class="bar">
+      <button id="settingsBack" class="btn secondary" type="button">Cancel</button>
+      <button id="settingsSave" class="btn primary" type="button">Save settings</button>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="line.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
