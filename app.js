@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '3';
+  var VERSION = '4';
   var OTHER = '__other__';
   var LS = {
     cfg: 'ea.cfg', lists: 'ea.lists', queue: 'ea.queue', usage: 'ea.usage',
@@ -276,7 +276,7 @@
     out.forEach(function (x) {
       box.appendChild(el('button', {
         'class': 'chip', type: 'button', text: x,
-        onclick: function () { $('item').value = x; renderChips(); updatePreview(); $('amount').focus(); }
+        onclick: function () { $('item').value = x; renderChips(); updatePreview(); }
       }));
     });
   }
@@ -373,10 +373,8 @@
     renderSelects(false);
     renderChips();
     updatePreview();
-    // Back to the top of a clean form, ready for the next amount. preventScroll stops the browser
-    // from scrolling anywhere else (for example to the Account block) while it moves the focus.
-    window.scrollTo(0, 0);
-    $('amount').focus({ preventScroll: true });
+    // Deliberately no focus() and no scrolling here: moving the focus to Amount opened the keyboard
+    // and scrolled the page to the top after every Save. The page stays exactly where it is.
   }
 
   function save() {
