@@ -28,7 +28,8 @@ Phone app (installed from GitHub Pages)  ──POST + token──▶  Apps Scrip
 - Item suggestions appear while you type. New items are remembered automatically.
 - Tick **Bill payment (not counted as an expense)** for credit card bills. They are written in parentheses and are not added to the day's total.
 - **Nothing today** logs a day with no spending.
-- The last 5 entries are listed, each with a delete button.
+- The last 5 entries are listed, each with an **edit** (pencil) and a **delete** button.
+- **Edit** opens the entry in the main form (a banner says "Editing the entry from …" with a **Cancel** button, and **Save** becomes **Update**). **Update** changes the entry in place in the Inbox: same row, same ID, same *Logged at*. By day refreshes by itself.
 - **Settings (⚙)**: add, remove and reorder Apps and Accounts (the top entry is the default), see the connection, run **Sync now**, see the app version.
 - After **Save** you see `Saving for Sat, 14 Nov…`, then `Saved for Sat, 14 Nov ✓`. With no signal you see `Saved on this phone for … Will upload when online.`
 
@@ -154,6 +155,14 @@ If you prefer not to use a link: on the **Connect** screen paste the web app URL
 3. Change App, Account or Date only if they differ from the defaults.
 4. Tap **Save**. The page stays where it is, so you can see the confirmation.
 
+**Fixing an entry**
+1. In **Last 5 entries**, tap the pencil next to the entry. The page moves to the top and the form fills with that entry (a sum such as `50+40+30` shows as typed).
+2. Change what is wrong (amount, item, App, Account, date, the bill-payment tick) and tap **Update**. **Cancel** leaves the entry as it was.
+3. Entries that are still waiting to upload can be edited with no signal. An entry that has already uploaded needs a connection; if there is none you see `Could not update…` and the form stays open, so tap **Update** again later.
+4. **Nothing** entries have no pencil: delete one and add it again.
+5. Only the last 5 entries can be edited in the app. For older ones, edit the Inbox row in the sheet by hand (By day follows the edit).
+6. The Line is rebuilt from the fields, so a Line you edited by hand in the sheet is replaced when you update that entry in the app.
+
 **Moving entries to the master sheet**
 1. Open **By day** in the Expense Inbox.
 2. For a day, select its *Detailed Expenditure* and *Total Expenditure* cells (two neighbouring cells) and copy them with **Ctrl+C**.
@@ -173,6 +182,9 @@ By day is rewritten by the script after every phone save or delete, whenever you
 3. The phone fetches the new version the next time the app is open with signal and reloads itself once (it waits if an entry is half typed). Settings shows the version number so you can confirm.
 
 **The backend (`Code.gs`)**
+
+If a release changes both the backend and the app, update the **backend first**, then the app files. An app that is newer than its backend shows errors (for example `unknown action`) until the backend is redeployed.
+
 1. Paste the new `Code.gs` over the old code in the script editor and press **Ctrl+S**.
 2. Run **`setup`** once.
 3. **Deploy → Manage deployments → pencil icon → Version: New version → Deploy.** The URL stays the same. Without this step, entries saved from the phone still use the old code.
@@ -192,6 +204,8 @@ By day is rewritten by the script after every phone save or delete, whenever you
 | Phone still shows the old app after an upload | Swipe the app away from recent apps and open it, twice. If it still shows the old one: first check the top says **✓ synced** (so nothing is waiting), then Chrome **⋮ → Settings → Site settings → All sites → your github.io address → Clear & reset**, and open the setup link again. |
 | `Token rejected. Check Settings.` | The token on the phone differs from the script's. Run `showToken` and compare, or run `rotateToken` and enter the new one in Settings. |
 | The top shows `N waiting` or `not synced` | No signal or the backend is unreachable. Open Settings → **Sync now**. Check that the web app URL opens in a browser and shows the `ok` message. Waiting entries are kept on the phone. |
+| `Could not update. Check your connection…` | The edit could not reach the server. Nothing was changed; the form stays open. Fix the connection and tap **Update** again. |
+| `Could not update: unknown action` | The backend has not been redeployed since the last `Code.gs` change. **Deploy → Manage deployments → New version.** |
 | `1 entry rejected by the server: …` | The server refused that entry (for example a bad amount). Enter it again. |
 | Entries from the phone are not formatted or By day is not updated, but edits in the sheet are | `Code.gs` was changed but the web app was not redeployed. **Deploy → Manage deployments → New version.** |
 | By day still shows a day after you deleted its rows by hand | Deleting rows does not trigger a refresh. Reopen the sheet, use **Expense Inbox → Refresh By day**, or log the next entry. |
