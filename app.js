@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '4';
+  var VERSION = '5';
   var OTHER = '__other__';
   var LS = {
     cfg: 'ea.cfg', lists: 'ea.lists', queue: 'ea.queue', usage: 'ea.usage',
@@ -34,6 +34,8 @@
   var syncing = false, syncAgain = false, lastErr = null, retryTimer = null;
   var waiters = [];                                                     // callers waiting for the current sync
   var rejected = {};                                                    // ids the server refused
+  var inflight = {};                                                    // ids in an upload that has not answered yet
+  var editing = null;                                                   // { id, date } while an entry is being edited
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -145,7 +147,10 @@
     if (queue.length) {
       chain = chain.then(function () {
         var batch = queue.slice();
+        batch.forEach(function (b) { inflight[b.id] = true; });
+        var release = function () { batch.forEach(function (b) { delete inflight[b.id]; }); };
         return api('add', { entries: batch }).then(function (r) {
+          release();
           var done = {};
           batch.forEach(function (b) { done[b.id] = true; });
           queue = queue.filter(function (q) { return !done[q.id]; });
@@ -154,7 +159,7 @@
           var rej = (r.result && r.result.rejected) || [];
           rej.forEach(function (x) { rejected[x.id] = true; });
           if (rej.length) toast(rej.length + ' entry rejected by the server: ' + rej[0].error, 5000);
-        });
+        }, function (err) { release(); throw err; });
       });
     }
     if (dirty) {
@@ -317,7 +322,10 @@
     var pendingIds = {};
     var pending = queue.map(function (q) {
       pendingIds[q.id] = true;
-      return { id: q.id, date: q.date, line: buildLine(q) || '', pending: true };
+      return {
+        id: q.id, date: q.date, line: buildLine(q) || '', pending: true,
+        item: q.item, app: q.app, account: q.account, counts: q.counts, amountText: q.amountText
+      };
     });
     var synced = (srv.recent || []).filter(function (r) { return !pendingIds[r.id]; });
     var all = synced.concat(pending).slice(-5).reverse();
@@ -326,13 +334,18 @@
     if (!all.length) { box.appendChild(el('div', { 'class': 'empty', text: 'Nothing logged yet.' })); return; }
     all.forEach(function (r) {
       var meta = prettyDate(r.date) + (r.pending ? ' · waiting to upload' : '');
-      box.appendChild(el('div', { 'class': 'r' }, [
+      // "Nothing" entries are deleted and re-added instead; an entry from before the backend
+      // update has no fields to edit yet.
+      var canEdit = r.item !== NOTHING && r.amountText !== undefined;
+      var row = el('div', { 'class': 'r' + (editing && editing.id === r.id ? ' editing' : '') }, [
         el('div', { 'class': 'r-main' }, [
           el('div', { 'class': 'r-line', text: r.line }),
           el('div', { 'class': 'r-meta' + (r.pending ? ' wait' : ''), text: meta })
-        ]),
-        el('button', { 'class': 'del', type: 'button', 'aria-label': 'Delete entry', text: '🗑', onclick: function () { removeEntry(r); } })
-      ]));
+        ])
+      ]);
+      if (canEdit) row.appendChild(el('button', { 'class': 'act', type: 'button', 'aria-label': 'Edit entry', text: '✎', onclick: function () { startEdit(r); } }));
+      row.appendChild(el('button', { 'class': 'act', type: 'button', 'aria-label': 'Delete entry', text: '🗑', onclick: function () { removeEntry(r); } }));
+      box.appendChild(row);
     });
   }
 
@@ -377,7 +390,23 @@
     // and scrolled the page to the top after every Save. The page stays exactly where it is.
   }
 
+  // Remembers what was typed: a new App/Account when "Add to list" is ticked, and the item.
+  function rememberChoices(e) {
+    addToListIfAsked('app', 'apps');
+    addToListIfAsked('account', 'accounts');
+    if (e.item) {
+      var k = e.item.toLowerCase();
+      usage[k] = (usage[k] || 0) + 1;
+      lsSet(LS.usage, usage);
+      if (!lists.items.some(function (x) { return x.toLowerCase() === k; })) {
+        lists.items.push(e.item);
+        lsSet(LS.lists, lists);
+      }
+    }
+  }
+
   function save() {
+    if (editing) { saveEdit(); return; }
     var e = currentEntry();
     var a = parseAmount(e.amountText);
     if (!a.ok || a.total <= 0) return;
@@ -391,22 +420,104 @@
       counts: e.counts,
       loggedAt: nowStr()
     };
-    addToListIfAsked('app', 'apps');
-    addToListIfAsked('account', 'accounts');
-    if (e.item) {
-      var k = e.item.toLowerCase();
-      usage[k] = (usage[k] || 0) + 1;
-      lsSet(LS.usage, usage);
-      if (!lists.items.some(function (x) { return x.toLowerCase() === k; })) {
-        lists.items.push(e.item);
-        lsSet(LS.lists, lists);
-      }
-    }
+    rememberChoices(e);
     enqueue(entry);
     resetForm();
   }
 
+  // ── Editing one of the last entries ──────────────────────────────────────────────────────
+  // The entry is opened in the main form. Update changes it in place (same row, same Logged at).
+  function setField(name, value) {
+    var sel = $(name);
+    touched[name] = true;
+    $(name + 'OtherText').value = '';
+    $(name + 'OtherAdd').checked = false;
+    var inList = Array.prototype.some.call(sel.options, function (o) { return o.value === value && o.value !== OTHER; });
+    if (!value) sel.value = '';
+    else if (inList) sel.value = value;
+    else { sel.value = OTHER; $(name + 'OtherText').value = value; }
+    syncOther(name);
+  }
+
+  function renderEditState() {
+    $('editBanner').hidden = !editing;
+    if (editing) $('editText').textContent = 'Editing the entry from ' + prettyDate(editing.date);
+    $('save').textContent = editing ? 'Update' : 'Save';
+    $('nothing').disabled = !!editing;
+  }
+
+  function startEdit(r) {
+    editing = { id: r.id, date: r.date };
+    $('amount').value = r.amountText || '';
+    $('item').value = r.item || '';
+    setField('app', r.app);
+    setField('account', r.account);
+    $('notExpense').checked = r.counts === false;
+    dateTouched = true;
+    setDate(r.date);
+    renderChips();
+    updatePreview();
+    renderEditState();
+    renderRecent();
+    window.scrollTo(0, 0); // the form is above the list: bring it into view
+  }
+
+  function endEdit() {
+    editing = null;
+    renderEditState();
+    dateTouched = false;
+    resetForm();
+    setDate(todayStr());
+    renderRecent();
+  }
+
+  function saveEdit() {
+    var e = currentEntry();
+    var a = parseAmount(e.amountText);
+    if (!a.ok || a.total <= 0) return;
+    var entry = {
+      id: editing.id,
+      date: $('date').value || todayStr(),
+      item: e.item,
+      amountText: e.amountText.replace(/\s+/g, ''),
+      app: e.app,
+      account: e.account,
+      counts: e.counts
+    };
+    var label = prettyDate(entry.date);
+    rememberChoices(e);
+    toast('Updating entry for ' + label + '…', 20000);
+
+    var qi = -1;
+    queue.forEach(function (q, i) { if (q.id === entry.id) qi = i; });
+    if (qi >= 0 && !inflight[entry.id]) {
+      // Still waiting on the phone: change it there, it uploads as the edited version.
+      entry.loggedAt = queue[qi].loggedAt;
+      queue[qi] = entry;
+      lsSet(LS.queue, queue);
+      endEdit();
+      sync().then(function () {
+        var waiting = queue.some(function (q) { return q.id === entry.id; });
+        toast(waiting ? 'Updated on this phone for ' + label + '. Will upload when online.' : 'Updated entry for ' + label + ' ✓', waiting ? 4000 : 2500);
+      });
+      return;
+    }
+    // Already on the server (or being uploaded right now): wait for any upload, then change the row.
+    var ready = qi >= 0 ? sync() : Promise.resolve();
+    ready
+      .then(function () { return api('update', { entries: [entry] }); })
+      .then(function (res) {
+        applyState(res.state);
+        var rej = (res.result && res.result.rejected) || [];
+        if (rej.length) { toast('Could not update: ' + rej[0].error, 5000); return; }
+        endEdit();
+        toast('Updated entry for ' + label + ' ✓', 2500);
+      })
+      .catch(function () { toast('Could not update. Check your connection, then tap Update again.', 5000); });
+  }
+
   function logNothing() {
+    if (editing) return;
     var date = $('date').value || todayStr();
     var n = countFor(date);
     if (n > 0 && !window.confirm(prettyDate(date) + ' already has ' + n + (n === 1 ? ' entry' : ' entries') + '. Add "Nothing" anyway?')) return;
@@ -417,6 +528,7 @@
   }
 
   function removeEntry(r) {
+    if (editing && editing.id === r.id) endEdit();
     if (r.pending) {
       queue = queue.filter(function (q) { return q.id !== r.id; });
       lsSet(LS.queue, queue);
@@ -571,6 +683,7 @@
     $('dYesterday').addEventListener('click', function () { dateTouched = true; setDate(yesterdayStr()); });
     $('date').addEventListener('change', function () { dateTouched = true; renderDate(); });
     $('save').addEventListener('click', save);
+    $('editCancel').addEventListener('click', endEdit);
     $('nothing').addEventListener('click', logNothing);
     $('settingsBack').addEventListener('click', function () { show('viewLog'); });
     $('settingsSave').addEventListener('click', saveSettings);

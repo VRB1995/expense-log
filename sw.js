@@ -1,7 +1,7 @@
 // Service worker: lets the app open with no signal. Same-origin files are served from the saved
 // copy and refreshed in the background. Calls to the backend are never touched.
 // Bump CACHE when you ship a new version, so the old saved copy is thrown away.
-var CACHE = 'expense-log-v4';
+var CACHE = 'expense-log-v5';
 var SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'line.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png'
