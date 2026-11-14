@@ -3,7 +3,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '5';
+  var VERSION = '6';
   var OTHER = '__other__';
   var LS = {
     cfg: 'ea.cfg', lists: 'ea.lists', queue: 'ea.queue', usage: 'ea.usage',
@@ -35,6 +35,8 @@
   var waiters = [];                                                     // callers waiting for the current sync
   var rejected = {};                                                    // ids the server refused
   var inflight = {};                                                    // ids in an upload that has not answered yet
+  var latestAction = {};                                                // id -> number of the newest action on that entry
+  var actionCount = 0;
   var editing = null;                                                   // { id, date } while an entry is being edited
 
   var $ = function (id) { return document.getElementById(id); };
@@ -144,24 +146,49 @@
     renderBadge();
     var st = null;
     var chain = Promise.resolve();
-    if (queue.length) {
-      chain = chain.then(function () {
-        var batch = queue.slice();
-        batch.forEach(function (b) { inflight[b.id] = true; });
-        var release = function () { batch.forEach(function (b) { delete inflight[b.id]; }); };
-        return api('add', { entries: batch }).then(function (r) {
-          release();
-          var done = {};
-          batch.forEach(function (b) { done[b.id] = true; });
-          queue = queue.filter(function (q) { return !done[q.id]; });
-          lsSet(LS.queue, queue);
-          st = r.state;
-          var rej = (r.result && r.result.rejected) || [];
-          rej.forEach(function (x) { rejected[x.id] = true; });
-          if (rej.length) toast(rej.length + ' entry rejected by the server: ' + rej[0].error, 5000);
-        }, function (err) { release(); throw err; });
+    var kind = function (op) { return function (q) { return (q.op || 'add') === op; }; };
+    var dropFromQueue = function (items) {
+      queue = queue.filter(function (q) { return items.indexOf(q) === -1; });
+      lsSet(LS.queue, queue);
+    };
+    var noteRejections = function (r, what) {
+      var rej = (r.result && r.result.rejected) || [];
+      rej.forEach(function (x) { rejected[x.id] = true; });
+      if (rej.length) toast(rej.length + ' ' + what + ' rejected by the server: ' + rej[0].error, 5000);
+    };
+
+    // 1. new entries
+    chain = chain.then(function () {
+      var batch = queue.filter(kind('add'));
+      if (!batch.length) return null;
+      batch.forEach(function (b) { inflight[b.id] = true; });
+      var release = function () { batch.forEach(function (b) { delete inflight[b.id]; }); };
+      return api('add', { entries: batch }).then(function (r) {
+        release();
+        dropFromQueue(batch);
+        st = r.state;
+        noteRejections(r, 'entry');
+      }, function (err) { release(); throw err; });
+    });
+    // 2. edits of entries that were already uploaded
+    chain = chain.then(function () {
+      var batch = queue.filter(kind('update'));
+      if (!batch.length) return null;
+      var entries = batch.map(function (q) { var c = Object.assign({}, q); delete c.op; return c; });
+      return api('update', { entries: entries }).then(function (r) {
+        dropFromQueue(batch);
+        st = r.state;
+        noteRejections(r, 'change');
       });
-    }
+    });
+    // 3. deletes of entries that were already uploaded, one at a time
+    chain = chain.then(function () {
+      return queue.filter(kind('delete')).reduce(function (p, d) {
+        return p.then(function () {
+          return api('delete', { id: d.id }).then(function (r) { dropFromQueue([d]); st = r.state; });
+        });
+      }, Promise.resolve());
+    });
     if (dirty) {
       chain = chain.then(function () {
         return api('saveLists', { apps: lists.apps, accounts: lists.accounts }).then(function (r) {
@@ -190,11 +217,20 @@
       });
   }
 
+  // Each entry only shows the message of its newest action (save, edit or delete), so a slow
+  // upload of an older action can never overwrite the message of a newer one.
+  function newAction(id) {
+    latestAction[id] = ++actionCount;
+    return latestAction[id];
+  }
+
   // Tells the user what happened to an entry they just saved, with its date.
   function announce(entry) {
     var label = prettyDate(entry.date);
+    var mine = newAction(entry.id);
     toast('Saving for ' + label + '…', 20000);
     sync().then(function () {
+      if (latestAction[entry.id] !== mine) return; // a newer action on this entry speaks now
       if (rejected[entry.id]) return; // the rejection message is already on screen
       var waiting = queue.some(function (q) { return q.id === entry.id; });
       toast(waiting
@@ -319,15 +355,25 @@
   }
 
   function renderRecent() {
-    var pendingIds = {};
-    var pending = queue.map(function (q) {
-      pendingIds[q.id] = true;
+    // What the list shows = what the server sent, with the waiting edits and deletes applied, plus
+    // the entries that have not uploaded yet.
+    var asRow = function (q) {
       return {
         id: q.id, date: q.date, line: buildLine(q) || '', pending: true,
         item: q.item, app: q.app, account: q.account, counts: q.counts, amountText: q.amountText
       };
+    };
+    var adds = {}, edits = {}, deleted = {};
+    queue.forEach(function (q) {
+      var op = q.op || 'add';
+      if (op === 'add') adds[q.id] = q;
+      else if (op === 'update') edits[q.id] = q;
+      else deleted[q.id] = true;
     });
-    var synced = (srv.recent || []).filter(function (r) { return !pendingIds[r.id]; });
+    var synced = (srv.recent || [])
+      .filter(function (r) { return !adds[r.id] && !deleted[r.id]; })
+      .map(function (r) { return edits[r.id] ? asRow(edits[r.id]) : r; });
+    var pending = queue.filter(function (q) { return (q.op || 'add') === 'add'; }).map(asRow);
     var all = synced.concat(pending).slice(-5).reverse();
     var box = $('recent');
     box.textContent = '';
@@ -486,34 +532,35 @@
     };
     var label = prettyDate(entry.date);
     rememberChoices(e);
+    delete rejected[entry.id];
+    var mine = newAction(entry.id);
     toast('Updating entry for ' + label + '…', 20000);
 
-    var qi = -1;
-    queue.forEach(function (q, i) { if (q.id === entry.id) qi = i; });
-    if (qi >= 0 && !inflight[entry.id]) {
-      // Still waiting on the phone: change it there, it uploads as the edited version.
-      entry.loggedAt = queue[qi].loggedAt;
-      queue[qi] = entry;
-      lsSet(LS.queue, queue);
-      endEdit();
-      sync().then(function () {
-        var waiting = queue.some(function (q) { return q.id === entry.id; });
-        toast(waiting ? 'Updated on this phone for ' + label + '. Will upload when online.' : 'Updated entry for ' + label + ' ✓', waiting ? 4000 : 2500);
-      });
-      return;
+    var addAt = -1, editAt = -1;
+    queue.forEach(function (q, i) {
+      if (q.id !== entry.id) return;
+      if ((q.op || 'add') === 'add') addAt = i;
+      else if (q.op === 'update') editAt = i;
+    });
+    if (addAt >= 0 && !inflight[entry.id]) {
+      // Not uploaded yet: change the waiting entry itself, it uploads as the edited version.
+      entry.loggedAt = queue[addAt].loggedAt;
+      queue[addAt] = entry;
+    } else {
+      // Already uploaded (or uploading right now): keep one waiting edit for this entry.
+      entry.op = 'update';
+      if (editAt >= 0) queue[editAt] = entry; else queue.push(entry);
     }
-    // Already on the server (or being uploaded right now): wait for any upload, then change the row.
-    var ready = qi >= 0 ? sync() : Promise.resolve();
-    ready
-      .then(function () { return api('update', { entries: [entry] }); })
-      .then(function (res) {
-        applyState(res.state);
-        var rej = (res.result && res.result.rejected) || [];
-        if (rej.length) { toast('Could not update: ' + rej[0].error, 5000); return; }
-        endEdit();
-        toast('Updated entry for ' + label + ' ✓', 2500);
-      })
-      .catch(function () { toast('Could not update. Check your connection, then tap Update again.', 5000); });
+    lsSet(LS.queue, queue);
+    endEdit();
+    sync().then(function () {
+      if (latestAction[entry.id] !== mine) return;
+      if (rejected[entry.id]) return; // the rejection message is already on screen
+      var waiting = queue.some(function (q) { return q.id === entry.id; });
+      toast(waiting
+        ? 'Updated on this phone for ' + label + '. Will upload when online.'
+        : 'Updated entry for ' + label + ' ✓', waiting ? 4000 : 2500);
+    });
   }
 
   function logNothing() {
@@ -529,17 +576,29 @@
 
   function removeEntry(r) {
     if (editing && editing.id === r.id) endEdit();
-    if (r.pending) {
-      queue = queue.filter(function (q) { return q.id !== r.id; });
+    var addAt = -1;
+    queue.forEach(function (q, i) { if (q.id === r.id && (q.op || 'add') === 'add') addAt = i; });
+    if (addAt >= 0 && !inflight[r.id]) {
+      // Never uploaded: simply forget it.
+      queue.splice(addAt, 1);
       lsSet(LS.queue, queue);
       renderRecent(); renderBadge();
       toast('Removed');
       return;
     }
     if (!window.confirm('Delete this entry?\n\n' + r.line)) return;
-    api('delete', { id: r.id })
-      .then(function (res) { applyState(res.state); toast('Deleted'); })
-      .catch(function () { toast('Could not delete. Check your connection.'); });
+    // Uploaded (or uploading right now): hide it now, delete it in the Inbox as soon as there is signal.
+    queue = queue.filter(function (q) { return !(q.id === r.id && q.op === 'update'); });
+    if (!queue.some(function (q) { return q.id === r.id && q.op === 'delete'; })) queue.push({ op: 'delete', id: r.id });
+    lsSet(LS.queue, queue);
+    renderRecent(); renderBadge();
+    var mine = newAction(r.id);
+    toast('Deleting…', 20000);
+    sync().then(function () {
+      if (latestAction[r.id] !== mine) return;
+      var waiting = queue.some(function (q) { return q.id === r.id && q.op === 'delete'; });
+      toast(waiting ? 'Removed on this phone. Will delete when online.' : 'Deleted ✓', waiting ? 4000 : 2500);
+    });
   }
 
   // ── Settings ─────────────────────────────────────────────────────────────────────────────
@@ -554,7 +613,7 @@
   }
 
   function renderSyncInfo() {
-    var parts = [queue.length + ' entries waiting to upload'];
+    var parts = [queue.length + (queue.length === 1 ? ' change' : ' changes') + ' waiting to upload'];
     if (dirty) parts.push('list changes waiting');
     if (lastErr) parts.push('last sync failed: ' + lastErr.message);
     $('syncInfo').textContent = parts.join(' · ');
